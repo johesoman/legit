@@ -1,9 +1,11 @@
 use anyhow::*;
-use ring::digest;
 use std::env;
 use std::fs;
 use std::path;
 use walkdir::WalkDir;
+
+mod object_database;
+use object_database::*;
 
 fn get_cwd() -> path::PathBuf {
   path::Path::new("test/repo").to_path_buf()
@@ -20,51 +22,40 @@ fn do_init() -> Result<()> {
   Ok(())
 }
 
-struct Blob {
-  pub bytes: Vec<u8>,
-  pub object_id: Vec<u8>,
-}
-
-impl Blob {
-  fn new(bytes: &[u8]) -> Blob {
-    let object_id = digest::digest(&digest::SHA1_FOR_LEGACY_USE_ONLY, bytes)
-      .as_ref()
-      .to_vec();
-
-    Blob {
-      object_id,
-      bytes: bytes.to_vec(),
-    }
-  }
-
-  fn serialize(&self) -> Vec<u8> {
-    let header = format!("blob {}\0", self.bytes.len());
-    let mut bytes: Vec<u8> = header.into_bytes();
-    bytes.extend(&self.bytes[..]);
-    bytes
-  }
-
-  fn deserialize(bytes: Vec<u8>) -> Result<Blob> {
-    if let Some(bytes) = bytes.split(|b| *b == 0u8).nth(1) {
-      Ok(Blob::new(&bytes.to_vec()))
-    } else {
-      Err(anyhow!("ERROR"))
-    }
-  }
-}
-
 fn is_not_git_entry(entry: &walkdir::DirEntry) -> bool {
   !entry.path().starts_with(get_cwd().join(".git"))
 }
 
 fn do_commit() -> Result<()> {
   let walker = WalkDir::new(get_cwd()).into_iter();
-  for entry in walker.filter_entry(is_not_git_entry) {
-    let entry = entry?;
 
-    if !entry.file_type().is_dir() {
-      println!("{:?}", entry.path());
-    }
+  let object_database = ObjectDatabase::new(get_cwd().join(".git/objects"));
+
+  let paths: Vec<_> = walker
+    .filter_entry(is_not_git_entry)
+    .filter_map(|entry| {
+      let entry = entry.unwrap();
+      let is_not_dir = !entry.file_type().is_dir();
+      is_not_dir.then(move || entry.path().to_path_buf())
+    })
+    .collect();
+
+  let blobs: Vec<_> = paths
+    .iter()
+    .map(|path| {
+      let contents = std::fs::read(path).unwrap();
+      Blob::new(&contents[..])
+    })
+    .collect();
+
+  let entries = paths.iter().zip(blobs.iter()).map(|(path, blob)| {
+    let path = path.strip_prefix(get_cwd()).unwrap().to_path_buf();
+    Entry::new(&path, &blob.object_id())
+  });
+
+  for blob in blobs {
+    println!("HEJ");
+    object_database.write_object(blob)?;
   }
 
   println!("You made a commit!");
