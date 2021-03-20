@@ -50,15 +50,29 @@ fn do_commit() -> Result<()> {
 
   let entries = paths.iter().zip(blobs.iter()).map(|(path, blob)| {
     let path = path.strip_prefix(get_cwd()).unwrap().to_path_buf();
-    Entry::new(&path, &blob.object_id())
-  });
+    Entry::new(&path, blob.object_id())
+  }).collect::<Vec<_>>();
 
   for blob in blobs {
-    println!("HEJ");
-    object_database.write_object(blob)?;
+    object_database.write_object(&blob)?;
   }
 
-  println!("You made a commit!");
+  let tree = Tree::new(entries);
+  object_database.write_object(&tree)?;
+
+  let commit = Commit {
+    author: Contributor::new("Martin Söderman", "kngrektor@gmail.com"),
+    authored_at: chrono::offset::Utc::now(),
+    committer: Contributor::new("Martin Söderman", "kngrektor@gmail.com"),
+    committed_at: chrono::offset::Utc::now(),
+    message: "Väldigt coolt meddelanden!".to_owned(),
+    tree_object_id: tree.object_id()
+  };
+  object_database.write_object(&commit)?;
+
+  std::fs::write(get_cwd().join(".git/HEAD"), commit.object_id().as_hex())?;
+
+  println!("[(root-commit) {}] {}", commit.object_id().as_hex(), commit.message);
   Ok(())
 }
 
